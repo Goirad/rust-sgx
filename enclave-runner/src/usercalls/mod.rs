@@ -356,7 +356,6 @@ impl EnclaveState {
         main: ErasedTcs,
         threads: Vec<ErasedTcs>,
         usercall_ext: Option<Box<UsercallExtension>>) -> StdResult<(), failure::Error>  {
-        eprintln!("Size of threads vector, {}", threads.len());
         let mut event_queues =
             FnvHashMap::with_capacity_and_hasher(threads.len() + 1, Default::default());
         let main = Self::event_queue_add_tcs(&mut event_queues, main);
@@ -374,16 +373,10 @@ impl EnclaveState {
         for tcs in threads {
             start_queue.push(tcs);
         }
-        if start_queue.is_empty() {
-            eprintln!("Start queue is empty");
-        }
         work_sender.send(Work::Stopped(start_queue.pop()?, EnclaveEntry::ExecutableMain));
         let mut num_of_threads = 10;//num_cpus::get();
         if num_of_threads < 2 {
             num_of_threads = 2;
-        }
-        if start_queue.is_empty() {
-            eprintln!("Start queue is empty2");
         }
         let kind = EnclaveKind::Command(Command {
             data: Mutex::new(CommandSync {
@@ -414,7 +407,6 @@ impl EnclaveState {
                         let work = work_receiver.recv();
                         let work = match work {
                             Err(crossbeam::channel::RecvError) => {
-                                eprintln!("Received RecvError");
                                 break;
                             },
                             Ok(work) => work,
@@ -423,15 +415,12 @@ impl EnclaveState {
                         let enclave_cloned = enclave_cloned.clone();
                         let result = match work {
                             Work::Stopped(tcs, mode) => {
-                                eprintln!("Starting work, {:?}", mode);
                                 RunningTcs::entry_async(enclave_cloned.clone(), tcs, &io_queue_send, mode)
                             }
                             Work::Running(state, usercall, coresult, mode) => {
-                                eprintln!("Starting work, {:?}", mode);
                                 RunningTcs::coentry_async(state, usercall, coresult, &io_queue_send, mode)
                             }
                         };
-                        eprintln!("Finished work {:?}", result);
 
                         if let Err(EnclaveAbort::MainReturned) = result {
                             // !!! do something
@@ -447,15 +436,12 @@ impl EnclaveState {
             // ///////////////////////////////
             'outer: loop {
                 let maybe_block_recv = |block| if block {
-                    eprintln!("Blocking wait on usercall thread");
                     io_queue_receive.recv().ok()
                 } else {
-                    eprintln!("NonBlocking wait on usercall thread");
                     io_queue_receive.try_recv().ok()
                 };
 
                 'inner: while let Some((mut state, usercall, mode)) = maybe_block_recv(true) {
-                    eprintln!("Got a request, {:?}", usercall);
                     let mut result;
                     {
                         let mut on_usercall =
@@ -463,13 +449,10 @@ impl EnclaveState {
                         let (p1, p2, p3, p4, p5) = usercall.parameters();
                         result = on_usercall(p1, p2, p3, p4, p5);
                     }
-                    eprintln!("Usercall done");
 
                     match result {
                         Ok(ret) => {
-                            eprintln!("Sending work");
                             work_sender.send(Work::Running(state, usercall, ret, mode));
-                            eprintln!("Sent work");
                         },
                         Err(EnclaveAbort::Exit { panic: true }) => {
                             eprintln!("EnclaveAbort::Exit panic: true, mode: {:?}", mode);
@@ -548,7 +531,6 @@ impl EnclaveState {
                             eprintln!("EnclaveAbort::unknown");
                         },
                     }
-                    eprintln!("Finished request");
                 }
             }
         });
@@ -838,9 +820,7 @@ impl RunningTcs {
                 );
                 if mode != EnclaveEntry::ExecutableMain {
                     let cmd = state.enclave.kind.as_command().unwrap();
-                    eprintln!("Getting cmddata from Mutex, send_to_appropriate_queue");
                     let mut cmddata = cmd.data.lock().unwrap();
-                    eprintln!("got cmddata from matrix, send_to_appropriate_queue");
                     cmddata.running_secondary_threads -= 1;
                     if cmddata.running_secondary_threads == 0 {
                         cmd.wait_secondary_threads.notify_all();
@@ -853,7 +833,6 @@ impl RunningTcs {
                             event_queue: state.event_queue,
                         });
                     }
-                    eprintln!("Dropping cmddata, send_to_appropriate_queue");
                     return Ok(WorkerThreadExit::NonMainReturned)
                 }
                 else {
@@ -861,7 +840,6 @@ impl RunningTcs {
                 }
             },
             tcs::CoResult::Yield(usercall) => {
-                eprintln!("got usercall");
                 io_send_queue.send((state, usercall, mode));
                 return Ok(WorkerThreadExit::UsercallQueued);
             },
@@ -1083,29 +1061,20 @@ impl RunningTcs {
             .kind
             .as_command()
             .ok_or(IoErrorKind::InvalidInput)?;
-        eprintln!("Getting cmddata from Mutex, launch_thread1");
         let mut cmddata = command.data.lock().unwrap();
         cmddata.running_secondary_threads += 1;
 
-        eprintln!("got cmddata from `matrix, launch_thread1");
-        if cmddata.threads_queue.is_empty() {
-            eprintln!("Threads queue is empty");
-        }
         let new_tcs = match cmddata.threads_queue.pop() {
             Ok(tcs) => tcs,
             Err(a) => {return Err(IoErrorKind::WouldBlock.into());},
         };
-        eprintln!("Popped tcs from thread_queue");
+
         let ret = work_sender.send(Work::Stopped(new_tcs, EnclaveEntry::ExecutableNonMain));
         match ret {
             Ok(()) => {
-                eprintln!("Dropping cmddata, launch_thread1");
-                eprintln!("Added work to queue");
                 Ok(())
             },
             Err(err) => {
-                eprintln!("Dropping cmddata, launch_thread1");
-                eprintln!("Couldn't add to worker queue");
                 let y = err.into_inner();
                 // do error catching
                 Err(std::io::Error::new(IoErrorKind::NotConnected, "Work Sender queue send error"))
@@ -1216,15 +1185,20 @@ impl RunningTcs {
 
         if ret.is_none() {
             loop {
-//                let ev = if wait {
+                let ev = if wait {
 //                    self.event_queue.recv()
-//                } else {
-                    let ev = match self.event_queue.try_recv() {
+                    match self.event_queue.try_recv() {
                         Ok(ev) => Ok(ev),
                         Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvError),
                         Err(mpsc::TryRecvError::Empty) => return Ok(event_mask.into()),
                     }
-//                }
+                } else {
+                    match self.event_queue.try_recv() {
+                        Ok(ev) => Ok(ev),
+                        Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvError),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                    }
+                }
                 .expect("TCS event queue disconnected");
 
                 if (ev & (EV_ABORT as u8)) != 0 {
