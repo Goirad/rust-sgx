@@ -658,9 +658,9 @@ impl RunningTcs {
             Err(EnclaveAbort::Exit { panic: true }) => {
                 #[cfg(unix)]
                 trap_attached_debugger(tcs.tcs.address().0 as _);
-                Err(EnclaveAbort::Exit {
-                    panic: EnclavePanic::from(buf.into_inner()),
-                })
+                let err = EnclavePanic::from(buf.into_inner());
+                println!("{}", err);
+                std::process::exit(1);
             }
             Err(EnclaveAbort::Exit { panic: false }) => Ok((tcs, (0, 0))),
             Err(EnclaveAbort::IndefiniteWait) => Err(EnclaveAbort::IndefiniteWait),
